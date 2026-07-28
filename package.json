@@ -5,12 +5,22 @@
   "description": "Puente entre dutic-mcp (aula virtual UNSA) y wacon-mcp (agenda/WhatsApp): sincroniza tareas académicas hacia la agenda de wacon y cruza fechas contra los grupos de curso de WhatsApp.",
   "type": "module",
   "bin": {
-    "dutic-wacon-sync": "src/sync.mjs"
+    "duticbat": "src/interfaces/cli/duticbat.mjs",
+    "dutic-wacon-sync": "src/interfaces/cli/sync-cli.mjs",
+    "dutic-wacon-mcp": "src/interfaces/mcp/server.mjs",
+    "dutic-wacon-listen": "src/interfaces/daemon/reminder-listener.mjs"
   },
   "scripts": {
-    "sync": "node src/sync.mjs"
+    "cli": "node src/interfaces/cli/duticbat.mjs",
+    "sync": "node src/interfaces/cli/sync-cli.mjs",
+    "mcp": "node src/interfaces/mcp/server.mjs",
+    "listen": "node src/interfaces/daemon/reminder-listener.mjs"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.1"
   }
 }

@@ -1,21 +1,13 @@
-const STOPWORDS = new Set(["de", "del", "la", "el", "los", "las", "y", "en", "para", "curso", "2026a", "2026b"]);
-
-function keywords(text) {
-  return (text ?? "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "") // quita tildes para matchear "álgebra" ~ "algebra"
-    .split(/[^a-z0-9]+/)
-    .filter((w) => w.length > 3 && !STOPWORDS.has(w));
-}
+import { keywords } from "./CourseMatcher.mjs";
 
 /**
  * Cruza tareas oficiales de DUTIC contra los "accionables" que wacon ya
  * extrajo de los grupos de WhatsApp de curso (wacon init --courses).
  * Heurística simple por palabras clave del nombre del curso — suficiente
  * para el caso real: "el grupo dice viernes, Moodle dice jueves".
+ * Puro: no hace I/O, solo compara datos ya obtenidos.
  */
-export function findDateConflicts(duticTasks, suggestedEvents, alreadyFlagged) {
+export function findDateConflicts(duticTasks, suggestedEvents, alreadyFlagged, thresholdHours = 20) {
   const conflicts = [];
   const pending = duticTasks.filter((t) => t.submission === "not-submitted" && t.dueDate);
 
@@ -32,7 +24,7 @@ export function findDateConflicts(duticTasks, suggestedEvents, alreadyFlagged) {
       const dutyMs = task.dueDate * 1000; // dutic dueDate viene en epoch segundos
       const suggestedMs = new Date(s.when).getTime();
       const diffHours = Math.abs(dutyMs - suggestedMs) / 3_600_000;
-      if (diffHours < 20) continue; // menos de ~1 día de diferencia: no vale la pena avisar
+      if (diffHours < thresholdHours) continue;
 
       const key = `${task.cmid}:${s.id}`;
       if (alreadyFlagged.includes(key)) continue;
@@ -41,4 +33,19 @@ export function findDateConflicts(duticTasks, suggestedEvents, alreadyFlagged) {
     }
   }
   return conflicts;
+}
+
+/** Convierte un conflicto detectado en el título/notas que se muestran en la agenda. */
+export function describeConflict(conflict) {
+  const { task, suggested } = conflict;
+  const title = `⚠️ Conflicto de fecha: ${task.courseName}`;
+  const notes = [
+    `Tarea: ${task.name}`,
+    `Moodle (oficial): ${new Date(task.dueDate * 1000).toLocaleString("es-PE")}`,
+    `Grupo de WhatsApp (${suggested.chatName ?? "curso"}): ${new Date(suggested.when).toLocaleString("es-PE")}`,
+    suggested.raw ? `Mensaje: "${suggested.raw}"` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return { title, notes, dueDateIso: task.dueDate ? new Date(task.dueDate * 1000).toISOString() : undefined };
 }

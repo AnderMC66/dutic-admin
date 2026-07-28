@@ -8,7 +8,7 @@
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$syncScript = Join-Path $repoRoot "src\sync.mjs"
+$syncScript = Join-Path $repoRoot "src\interfaces\cli\sync-cli.mjs"
 $nodeExe = (Get-Command node).Source
 
 if (-not (Test-Path $syncScript)) {
