@@ -14,7 +14,9 @@
     "cli": "node src/interfaces/cli/duticbat.mjs",
     "sync": "node src/interfaces/cli/sync-cli.mjs",
     "mcp": "node src/interfaces/mcp/server.mjs",
-    "listen": "node src/interfaces/daemon/reminder-listener.mjs"
+    "listen": "node src/interfaces/daemon/reminder-listener.mjs",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "typecheck": "tsc"
   },
   "engines": {
     "node": ">=20"
@@ -22,5 +24,9 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^5.9.3"
   }
 }
