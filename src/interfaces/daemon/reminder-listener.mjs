@@ -41,6 +41,24 @@ process.on("unhandledRejection", (err) => {
 });
 
 /**
+ * Apagado ordenado: registrar un handler de SIGINT/SIGTERM reemplaza la muerte
+ * inmediata por defecto, así que el ciclo en curso llega a terminar su
+ * `save()` en vez de que lo corten a mitad de escritura. La escritura del
+ * estado ya es atómica (FileStateRepository), pero salir limpio además evita
+ * dejar el lock puesto y tener que esperar a que expire por stale.
+ * Una segunda señal fuerza la salida, para no quedar colgado hasta 20 s
+ * esperando que termine el long-poll.
+ */
+let shuttingDown = false;
+for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"]) {
+  process.on(signal, () => {
+    if (shuttingDown) process.exit(130);
+    shuttingDown = true;
+    console.log(`\n${signal} recibido: cerrando al terminar el ciclo actual (otra señal fuerza la salida).`);
+  });
+}
+
+/**
  * Proceso siempre-vivo (registrado como Tarea Programada). Dos trabajos:
  *  1. wacon marca un evento como "fired" y lo mete en un buffer interno,
  *     pero NUNCA manda el WhatsApp solo — hace falta alguien haciendo
@@ -57,8 +75,7 @@ async function main() {
 
   let useCase = buildRunListenerCycle(deps);
 
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
+  while (!shuttingDown) {
     try {
       await useCase.runOnce();
     } catch (err) {
@@ -74,6 +91,8 @@ async function main() {
       }
     }
   }
+
+  deps.logger.log("=== reminder-listener detenido (apagado ordenado) ===");
 }
 
 main().catch((err) => logCrash("main() rechazado", err));
