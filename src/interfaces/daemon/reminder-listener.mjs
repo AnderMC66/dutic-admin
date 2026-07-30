@@ -5,14 +5,18 @@ import { RunListenerCycle } from "../../application/use-cases/RunListenerCycle.m
 import { buildCommandHandlers, buildBriefText } from "../commands/commandHandlers.mjs";
 import { ensureBridgeDir, LOG_PATH } from "../../infrastructure/paths.mjs";
 
-const RETRY_BACKOFF_MS = 10_000;
-const DAILY_BRIEF_HOUR = 7; // hora de Lima
+// Backoff exponencial: si wacon está caído una hora, un reintento fijo cada 10 s
+// son ~360 intentos, cada uno spawneando un `wacon status`. Arranca corto para
+// que un hipo no cueste minutos, y se aplana en un techo razonable.
+const RETRY_BACKOFF_MIN_MS = 10_000;
+const RETRY_BACKOFF_MAX_MS = 5 * 60_000;
 
 function buildRunListenerCycle(deps) {
   return new RunListenerCycle({
     ...deps,
     commandHandlers: buildCommandHandlers(deps),
-    dailyBrief: { hour: DAILY_BRIEF_HOUR, generate: () => buildBriefText(deps) },
+    // La hora sale de config.json (dailyBriefHour), no de una constante acá.
+    dailyBrief: { hour: deps.settings.dailyBriefHour, generate: () => buildBriefText(deps) },
   });
 }
 
@@ -75,14 +79,18 @@ async function main() {
 
   let useCase = buildRunListenerCycle(deps);
 
+  let backoffMs = RETRY_BACKOFF_MIN_MS;
+
   while (!shuttingDown) {
     try {
       await useCase.runOnce();
+      backoffMs = RETRY_BACKOFF_MIN_MS; // una vuelta sana reinicia la escalera
     } catch (err) {
-      deps.logger.log(`ERROR en el loop de recordatorios: ${err.stack ?? err.message}. Reintento en ${RETRY_BACKOFF_MS / 1000}s.`);
+      deps.logger.log(`ERROR en el loop de recordatorios: ${err.stack ?? err.message}. Reintento en ${Math.round(backoffMs / 1000)}s.`);
       // El daemon de wacon pudo haberse reiniciado (puerto/token nuevos en daemon.json):
       // se reconstruye todo en la próxima vuelta en vez de seguir usando datos viejos.
-      await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+      await new Promise((r) => setTimeout(r, backoffMs));
+      backoffMs = Math.min(backoffMs * 2, RETRY_BACKOFF_MAX_MS);
       try {
         deps = await buildCompositionRoot();
         useCase = buildRunListenerCycle(deps);
