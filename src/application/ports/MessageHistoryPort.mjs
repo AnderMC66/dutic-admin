@@ -6,7 +6,12 @@
  * comandos de este bridge son justamente mensajes tuyos.
  */
 export class MessageHistoryPort {
-  /** @param {{chatJid:string, limit?:number}} input @returns {Promise<Array<{id:string, fromMe:boolean, text:string|null, timestamp:number}>>} */
+  /**
+   * `type` distingue los mensajes que no son texto ("audio", "image", ...): sin
+   * él, una nota de voz llega como un mensaje vacío y es indistinguible de que
+   * nadie haya dicho nada.
+   * @param {{chatJid:string, limit?:number}} input
+   * @returns {Promise<Array<{id:string, fromMe:boolean, text:string|null, timestamp:number, type:string|null}>>} */
   async readRecent(input) {
     throw new Error("not implemented");
   }

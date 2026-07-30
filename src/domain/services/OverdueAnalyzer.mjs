@@ -3,7 +3,8 @@ import { isPending } from "../entities/AcademicTask.mjs";
 
 const EXTENSION_KEYWORDS = ["extien", "prorrog", "se mov", "nueva fecha", "amplia", "posterg", "se pasa", "cambio de fecha"];
 
-function mentionsExtension(text) {
+/** true si el texto suena a "la fecha se movió". Exportada para reusarla sobre audios transcritos. */
+export function mentionsExtension(text) {
   const t = (text ?? "").toLowerCase();
   return EXTENSION_KEYWORDS.some((k) => t.includes(k));
 }

@@ -4,10 +4,11 @@
  * bridge. Se reconocen los propios por el prefijo que pone
  * SyncAcademicTasks/ConflictDetector/OverdueAnalyzer en el título.
  */
-const BRIDGE_MARKERS = ["[DUTIC]", "⚠️ Conflicto de fecha"];
+/** Exportado para que la reconciliación reconozca en la agenda lo que puso este bridge. */
+export const BRIDGE_TITLE_MARKERS = ["[DUTIC]", "⚠️ Conflicto de fecha"];
 
 export function isBridgeReminder(trigger) {
-  return BRIDGE_MARKERS.some((marker) => trigger.title?.startsWith(marker));
+  return BRIDGE_TITLE_MARKERS.some((marker) => trigger.title?.startsWith(marker));
 }
 
 export function buildReminderText(trigger) {

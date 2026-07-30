@@ -8,6 +8,12 @@ export class WaconMessageHistoryAdapter extends MessageHistoryPort {
 
   async readRecent({ chatJid, limit = 20 }) {
     const rows = await this.client.rpc("readMessages", [chatJid, limit]);
-    return rows.map((m) => ({ id: m.id, fromMe: Boolean(m.from_me), text: m.text, timestamp: m.timestamp }));
+    return rows.map((m) => ({
+      id: m.id,
+      fromMe: Boolean(m.from_me),
+      text: m.text,
+      timestamp: m.timestamp,
+      type: m.message_type ?? null,
+    }));
   }
 }
