@@ -147,9 +147,9 @@ test("sin registro previo, se manda", () => {
 // ---------------------------------------------------------------- NameMatcher
 
 test("empareja el nombre oficial completo con el apodo de WhatsApp", () => {
-  assert.equal(namesMatch("RODRIGO ANDERSON CAPIA CONDORI", "Rodrigo Capia"), true);
+  assert.equal(namesMatch("CARLOS ANDRES MENDOZA TORRES", "Carlos Mendoza"), true);
   assert.equal(namesMatch("MARÍA JOSÉ QUISPE MAMANI", "Maria Quispe"), true, "con y sin tildes");
-  assert.equal(namesMatch("RODRIGO ANDERSON CAPIA CONDORI", "Rodrigo Vargas Peña"), false, "un solo nombre en común no alcanza");
+  assert.equal(namesMatch("CARLOS ANDRES MENDOZA TORRES", "Carlos Vargas Peña"), false, "un solo nombre en común no alcanza");
   assert.equal(namesMatch("JUAN PEREZ", "Juan"), true, "si el otro lado es un solo token, alcanza con uno");
   assert.equal(namesMatch("", "Juan"), false);
   assert.equal(namesMatch(null, null), false);
