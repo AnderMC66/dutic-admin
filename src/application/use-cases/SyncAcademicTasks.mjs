@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { isPending, taskTitle, dueDateIso } from "../../domain/entities/AcademicTask.mjs";
+import { isPending, isStateUnknown, taskTitle, dueDateIso } from "../../domain/entities/AcademicTask.mjs";
 import { findDateConflicts, describeConflict } from "../../domain/services/ConflictDetector.mjs";
 import { findSilentOverdue } from "../../domain/services/OverdueAnalyzer.mjs";
 import { safeFileName } from "../../domain/services/SafeFileName.mjs";
@@ -8,6 +8,15 @@ const MAX_DESCRIPTION_CHARS = 1200;
 
 const DEFAULT_REMINDER_MINUTES_BEFORE = 24 * 60;
 const DEFAULT_CONFLICT_THRESHOLD_HOURS = 20;
+const DEFAULT_FAILURE_NOTIFY_COOLDOWN_MS = 24 * 60 * 60_000;
+
+/** Identifica "el mismo fallo" entre corridas: el mensaje, normalizado y acotado. */
+function failureSignature(err) {
+  return String(err?.message ?? err)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
+}
 
 /**
  * Sincroniza las tareas pendientes de una fuente académica (AcademicTaskSourcePort)
@@ -27,6 +36,7 @@ export class SyncAcademicTasks {
     runLock,
     reminderMinutesBefore = DEFAULT_REMINDER_MINUTES_BEFORE,
     conflictThresholdHours = DEFAULT_CONFLICT_THRESHOLD_HOURS,
+    failureNotifyCooldownMs = DEFAULT_FAILURE_NOTIFY_COOLDOWN_MS,
   }) {
     this.taskSource = taskSource;
     this.agenda = agenda;
@@ -38,6 +48,7 @@ export class SyncAcademicTasks {
     this.attachmentsDestDir = attachmentsDestDir;
     this.reminderMinutesBefore = reminderMinutesBefore;
     this.conflictThresholdHours = conflictThresholdHours;
+    this.failureNotifyCooldownMs = failureNotifyCooldownMs;
   }
 
   /**
@@ -57,11 +68,10 @@ export class SyncAcademicTasks {
       ({ tasks, scanErrors } = await this.taskSource.listAllTasks());
     } catch (err) {
       this.logger.log(`ERROR obteniendo tareas: ${err.message}`);
-      await this.notifier
-        .notify(`⚠️ No se pudo sincronizar tu fuente académica.\nError: ${err.message}`)
-        .catch((e) => this.logger.log(`no se pudo avisar del error: ${e.message}`));
+      await this.reportFailure(err);
       throw err;
     }
+    await this.reportRecovery();
 
     if (scanErrors?.length) {
       this.logger.log(`${scanErrors.length} curso(s) no se pudieron barrer: ${scanErrors.map((e) => e.courseName).join(", ")}`);
@@ -184,23 +194,88 @@ export class SyncAcademicTasks {
       .filter((o) => !state.silentOverdueFlagged.includes(String(o.task.cmid)));
     for (const o of silentOverdue) state.silentOverdueFlagged.push(String(o.task.cmid));
 
+    // Tareas cuyo estado de entrega no se pudo leer: no se tocan (no sabemos si
+    // están entregadas), pero se cuentan y se avisan, porque el resto del
+    // sistema las descarta en silencio y son indistinguibles de una entregada.
+    // Sólo se avisan las nuevas: una tarea que falla el enriquecimiento corrida
+    // tras corrida no puede mandarte el mismo WhatsApp cada 6 horas.
+    const unknownState = tasks.filter(isStateUnknown);
+    const alreadyFlagged = new Set(state.unknownStateFlagged ?? []);
+    const newUnknownState = unknownState.filter((t) => !alreadyFlagged.has(String(t.cmid)));
+    const currentUnknownCmids = unknownState.map((t) => String(t.cmid));
+    // Con datos completos la marca es exactamente el conjunto actual, así que una
+    // tarea que vuelve a leerse bien se destildia sola y podría volver a avisar
+    // si falla de nuevo. Con datos parciales sólo se agrega, nunca se saca.
+    state.unknownStateFlagged = scanErrors?.length ? [...new Set([...alreadyFlagged, ...currentUnknownCmids])] : currentUnknownCmids;
+
     state.tasks = newTasksState;
     pruneStaleFlags(state, byCmid, scanErrors, this.logger);
     await this.stateRepository.save(state);
 
-    const summary = { added, dueChanged, resolved, conflicts, silentOverdue, keptUnscanned, scanErrors: scanErrors ?? [] };
+    const summary = { added, dueChanged, resolved, conflicts, silentOverdue, keptUnscanned, unknownState, newUnknownState, scanErrors: scanErrors ?? [] };
     this.logger.log(
       `Resumen: +${added.length} nuevas, ${dueChanged.length} con fecha cambiada, ${resolved.length} resueltas, ` +
-        `${conflicts.length} conflictos, ${silentOverdue.length} vencidas sin aviso.`,
+        `${conflicts.length} conflictos, ${silentOverdue.length} vencidas sin aviso, ${unknownState.length} sin estado legible.`,
     );
 
     // Las tareas nuevas ya se avisaron una por una (con indicaciones y adjuntos) dentro del
     // loop de arriba; este resumen agregado es solo para el resto de categorías.
-    if (dueChanged.length || resolved.length || conflicts.length || silentOverdue.length) {
+    if (dueChanged.length || resolved.length || conflicts.length || silentOverdue.length || newUnknownState.length) {
       await this.notifier.notify(buildSummaryMessage(summary)).catch((e) => this.logger.log(`notify falló: ${e.message}`));
     }
 
     return summary;
+  }
+
+  /**
+   * Avisa que el sync falló, pero una sola vez por causa y con un techo diario.
+   *
+   * Antes avisaba en cada corrida: con el cron cada 6 h y una sesión de Moodle
+   * caducada —que sólo se arregla corriendo `dutic login` a mano— eso es el
+   * mismo WhatsApp indefinidamente. El costo no es el ruido: es que te
+   * acostumbra a ignorar los avisos del bridge, justo lo que no querés cuando
+   * el próximo diga "tenés una entrega mañana".
+   */
+  async reportFailure(err) {
+    const state = await this.stateRepository.load();
+    const signature = failureSignature(err);
+    const previous = state.syncFailure;
+    const repeated = previous?.signature === signature;
+    const withinCooldown = repeated && Date.now() - (previous?.notifiedAt ?? 0) < this.failureNotifyCooldownMs;
+
+    state.syncFailure = {
+      signature,
+      message: err.message,
+      firstFailedAt: repeated ? (previous.firstFailedAt ?? Date.now()) : Date.now(),
+      failureCount: repeated ? (previous.failureCount ?? 0) + 1 : 1,
+      notifiedAt: withinCooldown ? previous.notifiedAt : Date.now(),
+    };
+    await this.stateRepository.save(state);
+
+    if (withinCooldown) {
+      this.logger.log(`Mismo fallo que la corrida anterior (${state.syncFailure.failureCount} seguidas); no se repite el aviso.`);
+      return;
+    }
+
+    const desde = repeated ? `\nFalla desde ${new Date(state.syncFailure.firstFailedAt).toLocaleString("es-PE")} (${state.syncFailure.failureCount} intentos).` : "";
+    await this.notifier
+      .notify(`⚠️ No se pudo sincronizar tu fuente académica.\nError: ${err.message}${desde}`)
+      .catch((e) => this.logger.log(`no se pudo avisar del error: ${e.message}`));
+  }
+
+  /** Si veníamos fallando y ya no, decilo: si no, nunca sabés que volvió a andar. */
+  async reportRecovery() {
+    const state = await this.stateRepository.load();
+    if (!state.syncFailure) return;
+
+    const { failureCount, firstFailedAt } = state.syncFailure;
+    delete state.syncFailure;
+    await this.stateRepository.save(state);
+
+    this.logger.log(`Sincronización recuperada tras ${failureCount} intento(s) fallido(s).`);
+    await this.notifier
+      .notify(`✅ La sincronización con DUTIC volvió a funcionar (fallaba desde ${new Date(firstFailedAt).toLocaleString("es-PE")}).`)
+      .catch((e) => this.logger.log(`no se pudo avisar la recuperación: ${e.message}`));
   }
 
   /** Descarga los adjuntos de una tarea (guías, rúbricas) a disco; nunca revienta el sync si falla. */
@@ -291,7 +366,7 @@ function buildNewTaskMessage(task) {
   return lines.join("\n");
 }
 
-function buildSummaryMessage({ dueChanged, resolved, conflicts, silentOverdue }) {
+function buildSummaryMessage({ dueChanged, resolved, conflicts, silentOverdue, newUnknownState }) {
   const lines = ["📚 *DUTIC ↔ wacon* — novedades:"];
   if (dueChanged.length) {
     lines.push(`\n📅 Fecha cambiada (${dueChanged.length}):`);
@@ -308,6 +383,10 @@ function buildSummaryMessage({ dueChanged, resolved, conflicts, silentOverdue })
   if (silentOverdue?.length) {
     lines.push(`\n🚨 Vencidas SIN aviso de prórroga (${silentOverdue.length}):`);
     for (const o of silentOverdue) lines.push(`• ${o.task.courseName}: ${o.task.name}`);
+  }
+  if (newUnknownState?.length) {
+    lines.push(`\n❔ No se pudo leer si están entregadas (${newUnknownState.length}) — revisalas en Moodle:`);
+    for (const t of newUnknownState) lines.push(`• ${t.courseName}: ${t.name}`);
   }
   return lines.join("\n");
 }

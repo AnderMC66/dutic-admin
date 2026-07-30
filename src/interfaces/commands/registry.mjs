@@ -278,7 +278,9 @@ const COMMANDS = [
         },
       },
     ],
-    execute: (deps, { dias }) => new PrefetchExamMaterials({ ...deps, daysBefore: dias, destDir: deps.examMaterialsDir }).run(),
+    // Sin argumento manda el default de config.json (examDaysBefore).
+    execute: (deps, { dias }) =>
+      new PrefetchExamMaterials({ ...deps, daysBefore: dias ?? deps.settings?.examDaysBefore, destDir: deps.examMaterialsDir }).run(),
     format: (r) =>
       r.fetched.length
         ? `📖 Material preparado para ${r.fetched.length} examen(es) próximo(s).`
@@ -318,6 +320,10 @@ export function formatBriefBody(r) {
   }
   if (r.dateConflicts.length) lines.push(`\n⚠️ ${r.dateConflicts.length} conflicto(s) de fecha.`);
   if (r.silentOverdue.length) lines.push(`\n🚨 ${r.silentOverdue.length} vencida(s) sin aviso.`);
+  if (r.unknownState?.length) {
+    lines.push(`\n❔ ${r.unknownState.length} tarea(s) sin estado legible — no sé si están entregadas:`);
+    for (const t of r.unknownState.slice(0, 5)) lines.push(`• ${t.course}: ${t.name}`);
+  }
   if (r.social?.pendingReplies?.length) lines.push(`\n💬 ${r.social.pendingReplies.length} chat(s) sin responder.`);
   return lines.join("\n");
 }

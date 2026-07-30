@@ -9,6 +9,8 @@ const EMPTY_STATE = {
   silentOverdueFlagged: [],
   gradeRisk: {},
   examMaterialsFetched: [],
+  unknownStateFlagged: [],
+  syncFailure: undefined,
   triggerListener: { msgCursor: undefined, triggerCursor: undefined },
   lastCommandTs: undefined,
   lastDailyBriefDate: undefined,

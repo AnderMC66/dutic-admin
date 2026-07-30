@@ -1,4 +1,4 @@
-import { isPending, dueDateIso } from "../../domain/entities/AcademicTask.mjs";
+import { isPending, isStateUnknown, dueDateIso } from "../../domain/entities/AcademicTask.mjs";
 import { assessCourseRisk } from "../../domain/services/GradeRisk.mjs";
 import { findBestCourseMatch } from "../../domain/services/CourseMatcher.mjs";
 import { findDateConflicts, describeConflict } from "../../domain/services/ConflictDetector.mjs";
@@ -17,13 +17,14 @@ import { rankByStudyPriority } from "../../domain/services/StudyPriority.mjs";
 const DEFAULT_SOCIAL_SINCE_MINUTES = 720; // 12h, mismo default que wacon.briefing()
 
 export class GetUnifiedBrief {
-  constructor({ taskSource, gradesSource, sisacadSource, agenda, socialBriefing, logger }) {
+  constructor({ taskSource, gradesSource, sisacadSource, agenda, socialBriefing, logger, passingPercentage }) {
     this.taskSource = taskSource;
     this.gradesSource = gradesSource;
     this.sisacadSource = sisacadSource;
     this.agenda = agenda;
     this.socialBriefing = socialBriefing;
     this.logger = logger;
+    this.riskOptions = passingPercentage ? { passingPercentage } : undefined;
   }
 
   async run() {
@@ -48,7 +49,7 @@ export class GetUnifiedBrief {
     const gradeItemsByCourseId = new Map(moodleGrades.map((c) => [c.courseId, c.items]));
     const prioritized = rankByStudyPriority(pending, gradeItemsByCourseId);
     const gradeRisks = moodleGrades
-      .map((c) => assessCourseRisk(c, findBestCourseMatch(c.courseName, sisacad?.courses, (s) => s.subject)))
+      .map((c) => assessCourseRisk(c, findBestCourseMatch(c.courseName, sisacad?.courses, (s) => s.subject), this.riskOptions))
       .filter((a) => a.status !== "sin_datos");
     const conflicts = findDateConflicts(tasks, suggested, [], 20).map(describeConflict);
     const silentOverdue = findSilentOverdue(tasks, suggested)
@@ -69,6 +70,10 @@ export class GetUnifiedBrief {
       gradeRisks,
       dateConflicts: conflicts,
       silentOverdue,
+      // Tareas cuyo estado de entrega no se pudo leer: no entran en pendingTasks
+      // (no sabemos si están entregadas) pero tampoco pueden desaparecer, que es
+      // lo que hacían antes. Ver isStateUnknown.
+      unknownState: tasks.filter(isStateUnknown).map((t) => ({ course: t.courseName, name: t.name, due: dueDateIso(t) })),
       // "Ponte al día" social de wacon (qué te falta responder, compromisos, agenda no-académica)
       // fusionado acá para no tener que preguntarle por separado a wacon.
       social: social
