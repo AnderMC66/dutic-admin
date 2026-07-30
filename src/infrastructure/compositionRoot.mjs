@@ -22,6 +22,7 @@ import { WaconTriggerAdapter } from "./wacon/WaconTriggerAdapter.mjs";
 import { WaconIdentityAdapter } from "./wacon/WaconIdentityAdapter.mjs";
 import { WaconMessageHistoryAdapter } from "./wacon/WaconMessageHistoryAdapter.mjs";
 import { FileTargetChatConfig } from "./persistence/FileTargetChatConfig.mjs";
+import { loadSettings } from "./persistence/FileSettings.mjs";
 import { NodeFileWriterAdapter } from "./persistence/NodeFileWriterAdapter.mjs";
 import { FileRunLock } from "./persistence/FileRunLock.mjs";
 import { CachedAcademicTaskSource, CachedGradesSource } from "./caching/CachedSources.mjs";
@@ -39,6 +40,7 @@ export async function buildCompositionRoot() {
   // necesita, así que un comando que solo usa dutic (`duticbat cursos`) sigue
   // funcionando con WhatsApp caído, en vez de fallar entero al arrancar.
   const waconClient = new WaconDaemonClient(logger);
+  const settings = loadSettings(logger);
 
   const identity = new WaconIdentityAdapter(waconClient);
   const targetChat = new FileTargetChatConfig(identity, logger);
@@ -46,13 +48,20 @@ export async function buildCompositionRoot() {
   return {
     logger,
     waconClient,
+    settings,
+    // Los tunables se exponen sueltos además de en `settings` porque los casos
+    // de uso los reciben por nombre en su constructor (ver SyncAcademicTasks).
+    reminderMinutesBefore: settings.reminderMinutesBefore,
+    conflictThresholdHours: settings.conflictThresholdHours,
+    passingPercentage: settings.passingPercentage,
+    failureNotifyCooldownMs: settings.failureNotifyCooldownHours * 3_600_000,
     agenda: new WaconAgendaAdapter(waconClient),
     notifier: new WaconNotifier(waconClient, targetChat, logger),
     // Envueltos en un caché de 60 s: `dutic tasks` y `dutic grades` son las dos
     // llamadas más caras (timeouts de 5 y 3 min) y varios casos de uso las piden
     // dos veces en la misma corrida.
-    taskSource: new CachedAcademicTaskSource(new DuticCliTaskSource()),
-    gradesSource: new CachedGradesSource(new DuticCliGradesSource()),
+    taskSource: new CachedAcademicTaskSource(new DuticCliTaskSource(), settings.sourceCacheSeconds * 1000),
+    gradesSource: new CachedGradesSource(new DuticCliGradesSource(), settings.sourceCacheSeconds * 1000),
     sisacadSource: new DuticCliSisacadSource(),
     materials: new DuticCliMaterialsAdapter(),
     people: new DuticCliPeopleSource(),

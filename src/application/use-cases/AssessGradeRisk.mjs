@@ -8,12 +8,15 @@ import { findBestCourseMatch } from "../../domain/services/CourseMatcher.mjs";
  * detectada. No repite el mismo aviso cada corrida.
  */
 export class AssessGradeRisk {
-  constructor({ gradesSource, sisacadSource, notifier, stateRepository, logger }) {
+  constructor({ gradesSource, sisacadSource, notifier, stateRepository, logger, passingPercentage }) {
     this.gradesSource = gradesSource;
     this.sisacadSource = sisacadSource;
     this.notifier = notifier;
     this.stateRepository = stateRepository;
     this.logger = logger;
+    // El mínimo aprobatorio sale de config.json; si no viene, manda el default
+    // de la UNSA que ya trae GradeRisk.
+    this.riskOptions = passingPercentage ? { passingPercentage } : undefined;
   }
 
   async run() {
@@ -32,7 +35,7 @@ export class AssessGradeRisk {
 
     for (const course of moodleGrades) {
       const sisacadCourse = findBestCourseMatch(course.courseName, sisacad?.courses, (c) => c.subject);
-      const assessment = assessCourseRisk(course, sisacadCourse);
+      const assessment = assessCourseRisk(course, sisacadCourse, this.riskOptions);
       assessments.push(assessment);
 
       const prev = state.gradeRisk[course.courseId];
