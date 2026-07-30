@@ -41,7 +41,8 @@ test("los tools de MCP están completos y sin nombres repetidos", () => {
     assert.ok(!nombres.has(command.mcp.name), `tool duplicado: ${command.mcp.name}`);
     nombres.add(command.mcp.name);
   }
-  assert.equal(nombres.size, 11, "los 11 tools de siempre");
+  // Cuenta exacta a propósito: si un tool desaparece sin querer, esto lo caza.
+  assert.equal(nombres.size, 16);
 });
 
 test("el esquema de MCP y los args posicionales usan los mismos nombres de campo", () => {

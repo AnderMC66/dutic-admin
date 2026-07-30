@@ -73,6 +73,11 @@ Todo lo que entra queda visible con los comandos normales de wacon: `wacon tasks
 | `bridge_list_courses` | Tus cursos con su courseId — llamalo antes de cualquier tool que pida uno. |
 | `bridge_pull_all_materials` | Descarga TODO el material de un curso (más amplio que `bridge_prefetch_exam_materials`). |
 | `bridge_export_calendar` | Genera un `.ics` con tus entregas y lo manda por WhatsApp — importalo al calendario del teléfono. |
+| `bridge_report_academic_changes` | Notas nuevas o corregidas, entregas calificadas, tareas nuevas y fechas movidas desde la última revisión. **Consume la línea base**: cada llamada devuelve sólo lo nuevo desde la anterior. |
+| `bridge_suggest_course_groups` | Qué cursos tienen su grupo de WhatsApp mapeado y cuáles no, proponiendo candidatos por similitud de nombre. |
+| `bridge_map_course_group` | Confirma un mapeo `courseId` → JID de grupo. Parámetros: `courseId`, `jid`. |
+| `bridge_search_course_chat` | Busca en todo el historial del grupo del curso (el digest sólo cubre las últimas horas). Parámetros: `courseId`, `consulta`. |
+| `bridge_reconcile_agenda` | Encuentra tareas/eventos que el bridge creó y perdió de vista, y que siguen disparando recordatorios. Parámetro: `close`. |
 
 Todos los tools se derivan de un único registro de comandos
 (`src/interfaces/commands/registry.mjs`), el mismo del que salen la CLI, el panel interactivo
@@ -425,6 +430,18 @@ puede diagnosticar la causa real de por qué Task Scheduler lo mataba, o registr
   caracteres de control (cmd.exe no tiene forma confiable de escaparlos) y reduce el nombre
   que viene de Moodle a un basename seguro antes de armar el path
   (`domain/services/SafeFileName.mjs`).
+- **Audios e imágenes del grupo**: cuando una tarea queda "vencida en silencio", el bridge
+  mira el grupo del curso alrededor del vencimiento. El texto lo lee siempre; para las notas
+  de voz y las fotos depende de que wacon tenga un backend de transcripción/visión
+  configurado (`wacon doctor`) — sin él devuelve el medio crudo, que este proceso no puede
+  interpretar. En ese caso **no** los cuenta como silencio: avisa "hay N audios/imágenes que
+  no puedo leer", que es distinto de "nadie dijo nada".
+- **`bridge_report_academic_changes` es dueño de la línea base de `dutic watch`**: cada
+  corrida consume las novedades. Si corrés `dutic watch` a mano vas a ver "sin novedades",
+  porque el bridge ya te las avisó.
+- **El mapeo curso↔grupo no se auto-aplica**: `grupos` propone por similitud de nombre pero
+  nunca escribe solo; un mapeo equivocado te mostraría el chat de otro curso. La confirmación
+  es tuya, con `mapear <courseId> <jid>`.
 - **Tareas sin estado de entrega legible**: dutic crea todas las tareas con
   `submission: "unknown"` y sólo el enriquecimiento —que traga sus fallos por tarea— les pone
   el estado real. Una tarea cuyo detalle no se pudo leer queda en `unknown`: el bridge **no**
