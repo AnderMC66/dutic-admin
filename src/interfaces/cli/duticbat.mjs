@@ -1,25 +1,17 @@
 #!/usr/bin/env node
 import { buildCompositionRoot } from "../../infrastructure/compositionRoot.mjs";
 import { buildCommandHandlers } from "../commands/commandHandlers.mjs";
+import { buildHelpText } from "../commands/registry.mjs";
 import { runMenu } from "./menu.mjs";
 
+// La lista de comandos sale del registro (../commands/registry.mjs), no se
+// escribe a mano: es la misma que ve WhatsApp, el menú interactivo y el MCP.
 const HELP = [
   "duticbat                       panel interactivo (elegís de una lista, te pregunta los datos)",
   "duticbat <comando> [args]      corre un comando directo, para scripts o uso rápido",
   "",
-  "Comandos:",
-  "  brief                          qué tengo pendiente (académico + WhatsApp)",
-  "  sync                           forzar sincronización DUTIC → wacon",
-  "  riesgo                         riesgo de reprobar por curso",
-  "  docentes <courseId>            docentes de un curso",
-  "  digest <courseId>              resumen del grupo de WhatsApp del curso",
-  "  companeros <courseId>          roster oficial vs. grupo de WhatsApp",
-  '  estudio <courseId> <tema...>   consejo de estudio (NotebookLM)',
-  "  material <courseId>            descargar todo el material del curso",
-  "  examen [dias]                  preparar material de exámenes próximos (default 3 días)",
-  "  calendario                     .ics con tus entregas, mandado por WhatsApp",
-  "  cursos                         tus cursos con su courseId (para los comandos que lo piden)",
-  "  ayuda                          este mensaje",
+  buildHelpText({ prefix: "  ", header: "Comandos:" }),
+  "  ayuda — este mensaje",
   "",
   "Mismos casos de uso que el servidor MCP (dutic-wacon-bridge) y los comandos de WhatsApp",
   "('!brief', '!sync', ...) — solo cambia la puerta de entrada. sync/material/examen/",

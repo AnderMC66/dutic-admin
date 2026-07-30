@@ -1,35 +1,13 @@
 import { createInterface } from "node:readline/promises";
 import { c, rule, headerBox, clearScreen, termWidth } from "./ui.mjs";
 import { buildCourseList } from "../commands/commandHandlers.mjs";
+import { COMMAND_REGISTRY } from "../commands/registry.mjs";
 
-/** Metadata de cada comando para el menú: categoría, qué pregunta, si es opcional. */
-export const COMMAND_SPECS = [
-  { name: "brief", category: "Académico", label: "Qué tengo pendiente (académico + WhatsApp)", args: [] },
-  { name: "sync", category: "Académico", label: "Forzar sincronización DUTIC → wacon", args: [] },
-  { name: "riesgo", category: "Académico", label: "Riesgo de reprobar por curso", args: [] },
-  { name: "calendario", category: "Académico", label: "Exportar calendario .ics (te lo manda por WhatsApp)", args: [] },
-  { name: "cursos", category: "Académico", label: "Tus cursos con su courseId", args: [] },
+// El menú se arma desde el registro de comandos: su categoría, su etiqueta y los
+// prompts de sus argumentos ya están definidos ahí, así que un comando nuevo
+// aparece acá solo. Antes esta lista era una cuarta copia que había que mantener
+// en sincronía a mano.
 
-  { name: "docentes", category: "Por curso", label: "Docentes de un curso", args: [{ name: "courseId", prompt: "courseId: " }] },
-  { name: "digest", category: "Por curso", label: "Resumen del grupo de WhatsApp del curso", args: [{ name: "courseId", prompt: "courseId: " }] },
-  { name: "companeros", category: "Por curso", label: "Roster oficial vs. grupo de WhatsApp", args: [{ name: "courseId", prompt: "courseId: " }] },
-  {
-    name: "estudio",
-    category: "Por curso",
-    label: "Consejo de estudio (NotebookLM)",
-    args: [
-      { name: "courseId", prompt: "courseId: " },
-      { name: "tema", prompt: "Tema (ej. 'cómo resolver la práctica de integrales'): " },
-    ],
-  },
-  { name: "material", category: "Por curso", label: "Descargar todo el material de un curso", args: [{ name: "courseId", prompt: "courseId: " }] },
-  {
-    name: "examen",
-    category: "Por curso",
-    label: "Preparar material de exámenes próximos",
-    args: [{ name: "dias", prompt: "Días de ventana (Enter = 3): ", optional: true }],
-  },
-];
 
 function renderMenu() {
   const width = termWidth();
@@ -37,7 +15,7 @@ function renderMenu() {
   const lines = [headerBox("📚  DUTIC ⇄ WACON — panel de comandos", now, width), ""];
 
   let lastCategory = null;
-  COMMAND_SPECS.forEach((spec, i) => {
+  COMMAND_REGISTRY.forEach((spec, i) => {
     if (spec.category !== lastCategory) {
       if (lastCategory !== null) lines.push("");
       lines.push(`  ${c.bold(spec.category.toUpperCase())}`);
@@ -76,9 +54,9 @@ async function printCourseListForPrompt(argSpec, cache, deps) {
 function resolveChoice(input) {
   const trimmed = input.trim().toLowerCase();
   if (!trimmed) return null;
-  const byIndex = COMMAND_SPECS[Number(trimmed) - 1];
+  const byIndex = COMMAND_REGISTRY[Number(trimmed) - 1];
   if (byIndex) return byIndex;
-  return COMMAND_SPECS.find((cmd) => cmd.name === trimmed) ?? null;
+  return COMMAND_REGISTRY.find((cmd) => cmd.name === trimmed) ?? null;
 }
 
 /**

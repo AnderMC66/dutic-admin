@@ -23,6 +23,8 @@ import { WaconIdentityAdapter } from "./wacon/WaconIdentityAdapter.mjs";
 import { WaconMessageHistoryAdapter } from "./wacon/WaconMessageHistoryAdapter.mjs";
 import { FileTargetChatConfig } from "./persistence/FileTargetChatConfig.mjs";
 import { NodeFileWriterAdapter } from "./persistence/NodeFileWriterAdapter.mjs";
+import { FileRunLock } from "./persistence/FileRunLock.mjs";
+import { CachedAcademicTaskSource, CachedGradesSource } from "./caching/CachedSources.mjs";
 import { BRIDGE_DIR } from "./paths.mjs";
 
 /**
@@ -32,19 +34,25 @@ import { BRIDGE_DIR } from "./paths.mjs";
  */
 export async function buildCompositionRoot() {
   const logger = new ConsoleFileLogger();
+  // Sin ensureDaemon() acá a propósito: armar el grafo no debe tocar la red ni
+  // spawnear nada. `rpc()` levanta el daemon la primera vez que alguien lo
+  // necesita, así que un comando que solo usa dutic (`duticbat cursos`) sigue
+  // funcionando con WhatsApp caído, en vez de fallar entero al arrancar.
   const waconClient = new WaconDaemonClient(logger);
-  await waconClient.ensureDaemon();
 
   const identity = new WaconIdentityAdapter(waconClient);
-  const targetChat = new FileTargetChatConfig(identity);
+  const targetChat = new FileTargetChatConfig(identity, logger);
 
   return {
     logger,
     waconClient,
     agenda: new WaconAgendaAdapter(waconClient),
     notifier: new WaconNotifier(waconClient, targetChat, logger),
-    taskSource: new DuticCliTaskSource(),
-    gradesSource: new DuticCliGradesSource(),
+    // Envueltos en un caché de 60 s: `dutic tasks` y `dutic grades` son las dos
+    // llamadas más caras (timeouts de 5 y 3 min) y varios casos de uso las piden
+    // dos veces en la misma corrida.
+    taskSource: new CachedAcademicTaskSource(new DuticCliTaskSource()),
+    gradesSource: new CachedGradesSource(new DuticCliGradesSource()),
     sisacadSource: new DuticCliSisacadSource(),
     materials: new DuticCliMaterialsAdapter(),
     people: new DuticCliPeopleSource(),
@@ -61,8 +69,14 @@ export async function buildCompositionRoot() {
     targetChat,
     messageHistory: new WaconMessageHistoryAdapter(waconClient),
     fileWriter: new NodeFileWriterAdapter(),
+    // Todas las rutas de salida viven acá, no en las puertas de entrada: antes
+    // "materiales" y "materiales-completos" estaban hardcodeados por duplicado en
+    // server.mjs y en commandHandlers.mjs, y sólo calendarPath estaba centralizado.
     calendarPath: join(BRIDGE_DIR, "calendario.ics"),
+    examMaterialsDir: join(BRIDGE_DIR, "materiales"),
+    allMaterialsDir: join(BRIDGE_DIR, "materiales-completos"),
     stateRepository: new FileStateRepository(),
-    courseGroupMap: new FileCourseGroupMap(),
+    runLock: new FileRunLock(),
+    courseGroupMap: new FileCourseGroupMap(logger),
   };
 }
