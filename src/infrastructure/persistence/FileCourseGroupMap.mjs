@@ -10,13 +10,25 @@ const TEMPLATE = {
 };
 
 export class FileCourseGroupMap extends CourseGroupMapPort {
+  constructor(logger) {
+    super();
+    this.logger = logger;
+  }
+
   async getChatForCourse(courseId) {
     if (!existsSync(COURSE_GROUP_MAP_PATH)) {
       ensureBridgeDir();
       writeFileSync(COURSE_GROUP_MAP_PATH, JSON.stringify(TEMPLATE, null, 2));
       return null;
     }
-    const map = JSON.parse(readFileSync(COURSE_GROUP_MAP_PATH, "utf8"));
-    return map[String(courseId)] ?? null;
+    try {
+      const map = JSON.parse(readFileSync(COURSE_GROUP_MAP_PATH, "utf8"));
+      return map[String(courseId)] ?? null;
+    } catch (err) {
+      // Archivo editado a mano y roto: se comporta como "curso no mapeado", que
+      // los casos de uso ya saben explicar, en vez de reventar la llamada.
+      this.logger?.log(`course-groups.json ilegible (${err.message}); trato el curso ${courseId} como no mapeado.`);
+      return null;
+    }
   }
 }
