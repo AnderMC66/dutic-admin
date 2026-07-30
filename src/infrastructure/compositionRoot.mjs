@@ -26,6 +26,12 @@ import { loadSettings } from "./persistence/FileSettings.mjs";
 import { NodeFileWriterAdapter } from "./persistence/NodeFileWriterAdapter.mjs";
 import { FileRunLock } from "./persistence/FileRunLock.mjs";
 import { CachedAcademicTaskSource, CachedGradesSource } from "./caching/CachedSources.mjs";
+import { DuticCliWatchAdapter } from "./dutic/DuticCliWatchAdapter.mjs";
+import { DuticCliDocumentReader } from "./dutic/DuticCliDocumentReader.mjs";
+import { WaconChatDirectoryAdapter } from "./wacon/WaconChatDirectoryAdapter.mjs";
+import { WaconMediaReaderAdapter } from "./wacon/WaconMediaReaderAdapter.mjs";
+import { WaconMessageSearchAdapter } from "./wacon/WaconMessageSearchAdapter.mjs";
+import { ExplainSilentOverdue } from "../application/use-cases/ExplainSilentOverdue.mjs";
 import { BRIDGE_DIR } from "./paths.mjs";
 
 /**
@@ -44,6 +50,9 @@ export async function buildCompositionRoot() {
 
   const identity = new WaconIdentityAdapter(waconClient);
   const targetChat = new FileTargetChatConfig(identity, logger);
+  const courseGroupMap = new FileCourseGroupMap(logger);
+  const messageHistory = new WaconMessageHistoryAdapter(waconClient);
+  const mediaReader = new WaconMediaReaderAdapter(waconClient, logger);
 
   return {
     logger,
@@ -76,7 +85,16 @@ export async function buildCompositionRoot() {
     triggerSource: new WaconTriggerAdapter(waconClient),
     identity,
     targetChat,
-    messageHistory: new WaconMessageHistoryAdapter(waconClient),
+    messageHistory,
+    mediaReader,
+    chatDirectory: new WaconChatDirectoryAdapter(waconClient),
+    messageSearch: new WaconMessageSearchAdapter(waconClient),
+    academicChanges: new DuticCliWatchAdapter(),
+    documentReader: new DuticCliDocumentReader(),
+    // Segunda pasada sobre el grupo del curso cuando una tarea queda "vencida en
+    // silencio": un anuncio de prórroga por nota de voz no puede contar como que
+    // nadie dijo nada.
+    explainSilentOverdue: new ExplainSilentOverdue({ courseGroupMap, messageHistory, mediaReader, logger }),
     fileWriter: new NodeFileWriterAdapter(),
     // Todas las rutas de salida viven acá, no en las puertas de entrada: antes
     // "materiales" y "materiales-completos" estaban hardcodeados por duplicado en
@@ -86,6 +104,6 @@ export async function buildCompositionRoot() {
     allMaterialsDir: join(BRIDGE_DIR, "materiales-completos"),
     stateRepository: new FileStateRepository(),
     runLock: new FileRunLock(),
-    courseGroupMap: new FileCourseGroupMap(logger),
+    courseGroupMap,
   };
 }

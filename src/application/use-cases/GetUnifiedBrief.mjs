@@ -15,6 +15,7 @@ import { rankByStudyPriority } from "../../domain/services/StudyPriority.mjs";
  * (p. ej. desde un tool de MCP).
  */
 const DEFAULT_SOCIAL_SINCE_MINUTES = 720; // 12h, mismo default que wacon.briefing()
+const STALE_SISACAD_DAYS = 14;
 
 export class GetUnifiedBrief {
   constructor({ taskSource, gradesSource, sisacadSource, agenda, socialBriefing, logger, passingPercentage }) {
@@ -56,9 +57,15 @@ export class GetUnifiedBrief {
       .filter((o) => o.silent)
       .map((o) => ({ course: o.task.courseName, name: o.task.name, due: dueDateIso(o.task) }));
 
+    // SISACAD se captura a mano (login + CAPTCHA): si la captura quedó vieja, el
+    // riesgo de notas se está calculando sólo con el % de Moodle sin decirlo.
+    const sisacadAgeDays = sisacad?.capturedAt ? Math.floor((Date.now() - sisacad.capturedAt) / 86_400_000) : null;
+
     return {
       generatedAt: new Date().toISOString(),
       sisacadAvailable: Boolean(sisacad),
+      sisacadAgeDays,
+      sisacadStale: sisacad ? sisacadAgeDays >= STALE_SISACAD_DAYS : true,
       pendingTasks: prioritized.map(({ task: t, weightPercent, priorityScore }) => ({
         course: t.courseName,
         name: t.name,

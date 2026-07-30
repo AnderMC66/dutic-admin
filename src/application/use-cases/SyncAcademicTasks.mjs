@@ -33,6 +33,8 @@ export class SyncAcademicTasks {
     logger,
     attachments,
     attachmentsDestDir,
+    documentReader,
+    explainSilentOverdue,
     runLock,
     reminderMinutesBefore = DEFAULT_REMINDER_MINUTES_BEFORE,
     conflictThresholdHours = DEFAULT_CONFLICT_THRESHOLD_HOURS,
@@ -46,6 +48,8 @@ export class SyncAcademicTasks {
     this.runLock = runLock;
     this.attachments = attachments;
     this.attachmentsDestDir = attachmentsDestDir;
+    this.documentReader = documentReader;
+    this.explainSilentOverdue = explainSilentOverdue;
     this.reminderMinutesBefore = reminderMinutesBefore;
     this.conflictThresholdHours = conflictThresholdHours;
     this.failureNotifyCooldownMs = failureNotifyCooldownMs;
@@ -145,8 +149,9 @@ export class SyncAcademicTasks {
         // Cada tarea nueva se avisa de una: indicaciones completas + adjuntos,
         // en vez de una línea suelta en el resumen agregado del final.
         const filePaths = await this.downloadAttachments(task);
+        const briefs = await this.readAttachmentBriefs(filePaths);
         await this.notifier
-          .notify(buildNewTaskMessage(task), filePaths)
+          .notify(buildNewTaskMessage(task, briefs), filePaths)
           .catch((e) => this.logger.log(`notify (tarea nueva) falló para ${cmid}: ${e.message}`));
         continue;
       }
@@ -185,14 +190,31 @@ export class SyncAcademicTasks {
     for (const c of conflicts) {
       await this.agenda.flagConflict(describeConflict(c)).catch((e) => this.logger.log(`flagConflict falló: ${e.message}`));
       state.flaggedConflicts.push(c.key);
+      // La sugerencia ya cumplió su función: quedó reflejada como conflicto en la
+      // agenda. Si no se descarta, vuelve a evaluarse en cada corrida para
+      // siempre y la bandeja de sugerencias de wacon nunca baja.
+      await this.agenda.dismissSuggestion?.(c.suggested.id).catch((e) => this.logger.log(`dismissSuggestion falló: ${e.message}`));
     }
 
     // La señal más urgente: tareas ya vencidas y sin entregar donde nadie
     // mencionó una prórroga en el grupo del curso.
-    const silentOverdue = findSilentOverdue(tasks, suggested)
+    let silentOverdue = findSilentOverdue(tasks, suggested)
       .filter((o) => o.silent)
       .filter((o) => !state.silentOverdueFlagged.includes(String(o.task.cmid)));
     for (const o of silentOverdue) state.silentOverdueFlagged.push(String(o.task.cmid));
+
+    // Segunda pasada sobre el grupo del curso: los eventos sugeridos sólo cubren
+    // texto ya extraído, y una prórroga anunciada por nota de voz contaba como
+    // silencio. Nunca rompe el sync: si no se puede mirar, queda como estaba.
+    if (this.explainSilentOverdue && silentOverdue.length) {
+      silentOverdue = await this.explainSilentOverdue
+        .run(silentOverdue)
+        .catch((e) => {
+          this.logger.log(`No se pudo revisar los grupos de curso: ${e.message}`);
+          return silentOverdue;
+        })
+        .then((revisados) => revisados.filter((o) => !o.explained));
+    }
 
     // Tareas cuyo estado de entrega no se pudo leer: no se tocan (no sabemos si
     // están entregadas), pero se cuentan y se avisan, porque el resto del
@@ -294,6 +316,22 @@ export class SyncAcademicTasks {
     }
     return paths;
   }
+
+  /**
+   * Lee la consigna, no sólo la manda. Antes el PDF de la rúbrica se descargaba
+   * y se reenviaba tal cual: para saber qué pide había que abrirlo. Acá se
+   * convierte a texto y se devuelve un extracto para el aviso — el archivo
+   * completo se sigue mandando igual.
+   */
+  async readAttachmentBriefs(paths) {
+    if (!this.documentReader || !paths.length) return [];
+    const briefs = [];
+    for (const path of paths.filter((p) => /\.pdf$/i.test(p))) {
+      const markdown = await this.documentReader.toMarkdown({ path }).catch(() => null);
+      if (markdown) briefs.push({ path, text: markdown });
+    }
+    return briefs;
+  }
 }
 
 /**
@@ -350,7 +388,9 @@ function buildAgendaNotes(task) {
 }
 
 /** Mensaje individual de WhatsApp para cada tarea nueva: indicaciones completas + de dónde salió. */
-function buildNewTaskMessage(task) {
+const MAX_ATTACHMENT_EXCERPT_CHARS = 700;
+
+function buildNewTaskMessage(task, attachmentBriefs = []) {
   const when = task.dueDate ? new Date(task.dueDate * 1000).toLocaleString("es-PE") : "sin fecha";
   const lines = [`🆕 *${task.courseName}*`, task.name, `📅 Entrega: ${when}`];
   if (task.hidden) lines.push("👁️ Tarea OCULTA — no aparece en el calendario de Moodle.");
@@ -361,6 +401,11 @@ function buildNewTaskMessage(task) {
   }
   if (task.attachments?.length) {
     lines.push(`\n📎 Adjunto${task.attachments.length > 1 ? "s" : ""}: ${task.attachments.map((a) => a.filename).join(", ")}`);
+  }
+  // Lo que dice la rúbrica, para no tener que abrir el PDF sólo para enterarte.
+  for (const brief of attachmentBriefs) {
+    lines.push(`\n📄 *De la consigna adjunta:*`);
+    lines.push(truncate(brief.text.trim(), MAX_ATTACHMENT_EXCERPT_CHARS, "el archivo completo va adjunto"));
   }
   if (task.url) lines.push(`\n${task.url}`);
   return lines.join("\n");
@@ -382,7 +427,12 @@ function buildSummaryMessage({ dueChanged, resolved, conflicts, silentOverdue, n
   }
   if (silentOverdue?.length) {
     lines.push(`\n🚨 Vencidas SIN aviso de prórroga (${silentOverdue.length}):`);
-    for (const o of silentOverdue) lines.push(`• ${o.task.courseName}: ${o.task.name}`);
+    for (const o of silentOverdue) {
+      // Un audio o una foto que no se pudo leer NO es silencio: decirlo cambia
+      // "nadie avisó nada" por "revisá el grupo, algo se dijo y no lo entiendo".
+      const duda = o.unreadableMedia ? ` — ⚠️ hay ${o.unreadableMedia} audio/imagen en el grupo que no puedo leer` : "";
+      lines.push(`• ${o.task.courseName}: ${o.task.name}${duda}`);
+    }
   }
   if (newUnknownState?.length) {
     lines.push(`\n❔ No se pudo leer si están entregadas (${newUnknownState.length}) — revisalas en Moodle:`);

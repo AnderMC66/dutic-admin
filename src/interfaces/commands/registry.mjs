@@ -11,6 +11,10 @@ import { GetCourseDigest } from "../../application/use-cases/GetCourseDigest.mjs
 import { GetCourseTeachers } from "../../application/use-cases/GetCourseTeachers.mjs";
 import { ExportCalendar } from "../../application/use-cases/ExportCalendar.mjs";
 import { ListCourses } from "../../application/use-cases/ListCourses.mjs";
+import { ReportAcademicChanges } from "../../application/use-cases/ReportAcademicChanges.mjs";
+import { SuggestCourseGroups, MapCourseGroup } from "../../application/use-cases/SuggestCourseGroups.mjs";
+import { ReconcileAgenda } from "../../application/use-cases/ReconcileAgenda.mjs";
+import { SearchCourseChat } from "../../application/use-cases/SearchCourseChat.mjs";
 
 /**
  * Cada comando, definido UNA sola vez.
@@ -155,6 +159,109 @@ const COMMANDS = [
   },
 
   {
+    name: "novedades",
+    category: "Académico",
+    label: "Notas nuevas, entregas calificadas y tareas nuevas desde la última revisión",
+    args: [],
+    execute: (deps) => new ReportAcademicChanges(deps).run(),
+    format: (r) => {
+      if (r.firstRun) return "🔔 Primera revisión: guardé la línea base. Corré esto de nuevo más tarde para ver novedades.";
+      const total = r.newGrades.length + r.gradeChanges.length + r.submissionChanges.length + r.newTasks.length + r.dueDateChanges.length;
+      if (!total) return "🔔 Sin novedades desde la última revisión.";
+      return (
+        `🔔 ${r.newGrades.length} nota(s) nueva(s), ${r.gradeChanges.length} corregida(s), ` +
+        `${r.submissionChanges.length} entrega(s) con estado nuevo, ${r.newTasks.length} tarea(s) nueva(s). Te mandé el detalle.`
+      );
+    },
+    mcp: {
+      name: "bridge_report_academic_changes",
+      title: "Novedades académicas",
+      description:
+        "Qué cambió desde la última revisión: notas nuevas o corregidas, entregas que pasaron a calificadas, tareas " +
+        "nuevas y fechas movidas. OJO: consume la línea base — cada llamada devuelve sólo lo nuevo desde la anterior, " +
+        "y manda un WhatsApp si hay algo.",
+      inputSchema: {},
+    },
+  },
+  {
+    name: "grupos",
+    category: "Académico",
+    label: "Qué cursos tienen su grupo de WhatsApp mapeado (y propone los que faltan)",
+    args: [],
+    execute: (deps) => new SuggestCourseGroups(deps).run(),
+    format: (r) => {
+      const lines = [`🔗 *Mapeo curso → grupo* (${r.mapped.length} listo(s), ${r.unmapped.length} sin mapear):`];
+      for (const c of r.mapped) lines.push(`✅ ${c.courseId} — ${shortCourseLabel(c.courseName)} → ${c.groupName ?? c.chatJid}`);
+      for (const c of r.unmapped) {
+        lines.push(`❌ ${c.courseId} — ${shortCourseLabel(c.courseName)}`);
+        if (c.suggestion) lines.push(`     ¿será "${c.suggestion.name}"? → mapear ${c.courseId} ${c.suggestion.jid}`);
+      }
+      if (r.unmapped.length) lines.push(`\nSin mapear, el digest, el cruce de compañeros y el asesor de estudio no funcionan para esos cursos.`);
+      return lines.join("\n");
+    },
+    mcp: {
+      name: "bridge_suggest_course_groups",
+      title: "Mapeo curso ↔ grupo de WhatsApp",
+      description:
+        "Lista qué cursos tienen su grupo de WhatsApp mapeado y cuáles no, proponiendo candidatos por similitud de " +
+        "nombre para los que faltan. Solo lectura: para confirmar un mapeo hay que usar bridge_map_course_group.",
+      inputSchema: {},
+    },
+  },
+  {
+    name: "mapear",
+    category: "Académico",
+    label: "Confirmar el grupo de WhatsApp de un curso",
+    args: [
+      courseIdArg,
+      {
+        name: "jid",
+        prompt: "JID del grupo (termina en @g.us): ",
+        parse: (raw) => (raw ? { value: raw } : { error: "hace falta el JID del grupo." }),
+      },
+    ],
+    execute: (deps, { courseId, jid }) => new MapCourseGroup(deps).run(courseId, jid),
+    format: (r) =>
+      r.mapped
+        ? `✅ Curso ${r.courseId} → ${r.groupName ?? r.chatJid}${r.warning ? `\n⚠️ ${r.warning}` : ""}`
+        : `⚠️ ${r.message}`,
+    mcp: {
+      name: "bridge_map_course_group",
+      title: "Mapear un curso a su grupo",
+      description: "Guarda el mapeo courseId → JID de grupo de WhatsApp que propone bridge_suggest_course_groups.",
+      inputSchema: {
+        courseId: z.number().int().describe("courseId de dutic."),
+        jid: z.string().describe("JID del grupo de WhatsApp, termina en @g.us."),
+      },
+    },
+  },
+  {
+    name: "reconciliar",
+    category: "Académico",
+    label: "Buscar tareas/eventos huérfanos que el bridge dejó en la agenda",
+    args: [],
+    // `close` sólo llega por MCP; desde la CLI/WhatsApp no hay forma de pedirlo,
+    // que es justamente lo que se quiere: cerrar cosas de la agenda no puede ser
+    // un efecto secundario de mirar.
+    execute: (deps, input) => new ReconcileAgenda(deps).run({ close: Boolean(input?.close) }),
+    format: (r) => {
+      const total = r.orphanTasks.length + r.orphanEvents.length;
+      if (!total) return "🧹 La agenda está en orden: nada huérfano del bridge.";
+      const lines = [`🧹 ${r.orphanTasks.length} tarea(s) y ${r.orphanEvents.length} evento(s) huérfanos (el bridge los creó y perdió el rastro):`];
+      for (const t of [...r.orphanTasks, ...r.orphanEvents].slice(0, 10)) lines.push(`• ${t.title}`);
+      lines.push(`\nSiguen disparando recordatorios. Para cerrarlos: bridge_reconcile_agenda con close=true.`);
+      return lines.join("\n");
+    },
+    mcp: {
+      name: "bridge_reconcile_agenda",
+      title: "Reconciliar la agenda",
+      description:
+        "Cruza lo que hay en la agenda de wacon contra lo que el bridge cree haber creado, para encontrar tareas y " +
+        "eventos huérfanos que quedaron disparando recordatorios. Con close=true los cierra.",
+      inputSchema: { close: z.boolean().default(false).describe("Si es true, cierra los huérfanos encontrados.") },
+    },
+  },
+  {
     name: "docentes",
     category: "Por curso",
     label: "Docentes de un curso",
@@ -248,6 +355,42 @@ const COMMANDS = [
     },
   },
   {
+    name: "buscar",
+    category: "Por curso",
+    label: "Buscar en el historial del grupo del curso",
+    args: [
+      courseIdArg,
+      {
+        name: "consulta",
+        prompt: "Qué buscás (ej. 'formato del TIF'): ",
+        rest: true,
+        parse: (raw) => (raw ? { value: raw } : { error: "hace falta qué buscar." }),
+      },
+    ],
+    execute: (deps, { courseId, consulta }) => new SearchCourseChat(deps).run(courseId, consulta),
+    format: (r) => {
+      if (!r.searched) return r.message;
+      if (!r.hits.length) return `🔍 Nada sobre "${r.query}" en el grupo de ese curso.`;
+      const lines = [`🔍 ${r.hits.length} resultado(s) para "${r.query}":`];
+      for (const h of r.hits.slice(0, 8)) {
+        const cuando = new Date(h.timestamp).toLocaleDateString("es-PE");
+        lines.push(`• [${cuando}] ${(h.snippet ?? h.text ?? "").slice(0, 160)}`);
+      }
+      return lines.join("\n");
+    },
+    mcp: {
+      name: "bridge_search_course_chat",
+      title: "Buscar en el grupo de un curso",
+      description:
+        "Busca en todo el historial del grupo de WhatsApp de un curso (el digest sólo cubre las últimas horas). " +
+        "Útil para '¿qué dijo el profe sobre el formato?'. Requiere el curso mapeado.",
+      inputSchema: {
+        courseId: z.number().int().describe("courseId de dutic."),
+        consulta: z.string().describe("Qué buscar, en palabras."),
+      },
+    },
+  },
+  {
     name: "material",
     category: "Por curso",
     label: "Descargar todo el material de un curso",
@@ -320,6 +463,10 @@ export function formatBriefBody(r) {
   }
   if (r.dateConflicts.length) lines.push(`\n⚠️ ${r.dateConflicts.length} conflicto(s) de fecha.`);
   if (r.silentOverdue.length) lines.push(`\n🚨 ${r.silentOverdue.length} vencida(s) sin aviso.`);
+  if (r.sisacadStale) {
+    const desde = r.sisacadAgeDays == null ? "nunca se capturó" : `hace ${r.sisacadAgeDays} días`;
+    lines.push(`\n📊 SISACAD ${desde}: el riesgo de notas sale sólo del % de Moodle. Corré 'dutic sisacad' para compararlo con lo oficial.`);
+  }
   if (r.unknownState?.length) {
     lines.push(`\n❔ ${r.unknownState.length} tarea(s) sin estado legible — no sé si están entregadas:`);
     for (const t of r.unknownState.slice(0, 5)) lines.push(`• ${t.course}: ${t.name}`);
