@@ -1,6 +1,6 @@
 import { isPending, dueDateIso } from "../../domain/entities/AcademicTask.mjs";
 import { assessCourseRisk } from "../../domain/services/GradeRisk.mjs";
-import { sameCourse } from "../../domain/services/CourseMatcher.mjs";
+import { findBestCourseMatch } from "../../domain/services/CourseMatcher.mjs";
 import { findDateConflicts, describeConflict } from "../../domain/services/ConflictDetector.mjs";
 import { findSilentOverdue } from "../../domain/services/OverdueAnalyzer.mjs";
 import { rankByStudyPriority } from "../../domain/services/StudyPriority.mjs";
@@ -48,7 +48,7 @@ export class GetUnifiedBrief {
     const gradeItemsByCourseId = new Map(moodleGrades.map((c) => [c.courseId, c.items]));
     const prioritized = rankByStudyPriority(pending, gradeItemsByCourseId);
     const gradeRisks = moodleGrades
-      .map((c) => assessCourseRisk(c, sisacad?.courses.find((s) => sameCourse(s.subject, c.courseName)) ?? null))
+      .map((c) => assessCourseRisk(c, findBestCourseMatch(c.courseName, sisacad?.courses, (s) => s.subject)))
       .filter((a) => a.status !== "sin_datos");
     const conflicts = findDateConflicts(tasks, suggested, [], 20).map(describeConflict);
     const silentOverdue = findSilentOverdue(tasks, suggested)

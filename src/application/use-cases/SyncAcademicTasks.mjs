@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { isPending, taskTitle, dueDateIso } from "../../domain/entities/AcademicTask.mjs";
 import { findDateConflicts, describeConflict } from "../../domain/services/ConflictDetector.mjs";
 import { findSilentOverdue } from "../../domain/services/OverdueAnalyzer.mjs";
+import { safeFileName } from "../../domain/services/SafeFileName.mjs";
 
 const MAX_DESCRIPTION_CHARS = 1200;
 
@@ -23,6 +24,7 @@ export class SyncAcademicTasks {
     logger,
     attachments,
     attachmentsDestDir,
+    runLock,
     reminderMinutesBefore = DEFAULT_REMINDER_MINUTES_BEFORE,
     conflictThresholdHours = DEFAULT_CONFLICT_THRESHOLD_HOURS,
   }) {
@@ -31,13 +33,25 @@ export class SyncAcademicTasks {
     this.notifier = notifier;
     this.stateRepository = stateRepository;
     this.logger = logger;
+    this.runLock = runLock;
     this.attachments = attachments;
     this.attachmentsDestDir = attachmentsDestDir;
     this.reminderMinutesBefore = reminderMinutesBefore;
     this.conflictThresholdHours = conflictThresholdHours;
   }
 
+  /**
+   * Dos sincronizaciones a la vez (el cron de 6h disparando mientras escribís
+   * "!sync" por WhatsApp) se pisan el estado de `tasks`: la segunda en guardar
+   * deja huérfanas en la agenda las tareas que creó la primera, y la corrida
+   * siguiente las re-crea y te las re-anuncia. Se serializan entre procesos.
+   */
   async run() {
+    if (!this.runLock) return this.performSync();
+    return this.runLock.withExclusiveRun("sync-academic-tasks", () => this.performSync());
+  }
+
+  async performSync() {
     let tasks, scanErrors;
     try {
       ({ tasks, scanErrors } = await this.taskSource.listAllTasks());
@@ -52,6 +66,7 @@ export class SyncAcademicTasks {
     if (scanErrors?.length) {
       this.logger.log(`${scanErrors.length} curso(s) no se pudieron barrer: ${scanErrors.map((e) => e.courseName).join(", ")}`);
     }
+    const unscanned = unscannedCourseKeys(scanErrors);
 
     const state = await this.stateRepository.load();
     const prevTasks = state.tasks;
@@ -60,16 +75,32 @@ export class SyncAcademicTasks {
     const added = [];
     const dueChanged = [];
     const resolved = [];
+    const keptUnscanned = [];
 
     // Lo que ya estaba trackeado y dejó de estar pendiente (entregado, calificado
     // o desapareció): se cierra su reflejo en la agenda.
     for (const [cmid, prevEntry] of Object.entries(prevTasks)) {
       const current = byCmid.get(cmid);
       if (current && isPending(current)) continue;
+
+      // Si el curso de esta tarea no se pudo barrer, su ausencia del resultado
+      // no significa nada: ausencia != entregada. Cerrarla acá la sacaría de la
+      // agenda y la corrida siguiente la traería de vuelta como "nueva", con
+      // WhatsApp y adjuntos incluidos. Se preserva el tracking tal cual.
+      if (!current && isUnscanned(prevEntry, unscanned)) {
+        newTasksState[cmid] = prevEntry;
+        keptUnscanned.push(prevEntry.title);
+        continue;
+      }
+
       await this.agenda
         .close({ taskId: prevEntry.waconTaskId, eventId: prevEntry.waconEventId })
         .catch((e) => this.logger.log(`close falló para ${cmid}: ${e.message}`));
       resolved.push(prevEntry.title);
+    }
+
+    if (keptUnscanned.length) {
+      this.logger.log(`${keptUnscanned.length} tarea(s) de cursos no barridos se mantienen sin cambios (no se cierran ni se re-anuncian).`);
     }
 
     // Lo pendiente hoy: crear lo nuevo, reprogramar lo que cambió de fecha.
@@ -90,6 +121,9 @@ export class SyncAcademicTasks {
         newTasksState[cmid] = {
           title,
           courseName: task.courseName,
+          // Se guarda para poder reconocer, en corridas futuras, si el curso de
+          // esta tarea es uno que no se pudo barrer (ver unscannedCourseKeys).
+          courseId: task.courseId,
           dueDate: task.dueDate,
           submission: task.submission,
           dateConflict: task.dateConflict,
@@ -107,10 +141,10 @@ export class SyncAcademicTasks {
         continue;
       }
 
-      newTasksState[cmid] = { ...prevEntry, title, submission: task.submission, dateConflict: task.dateConflict };
+      newTasksState[cmid] = { ...prevEntry, title, courseId: task.courseId, submission: task.submission, dateConflict: task.dateConflict };
 
       if (task.dueDate !== prevEntry.dueDate) {
-        const { eventId } = await this.agenda
+        const { taskId: rescheduledTaskId, eventId } = await this.agenda
           .reschedule({
             taskId: prevEntry.waconTaskId,
             eventId: prevEntry.waconEventId,
@@ -124,6 +158,9 @@ export class SyncAcademicTasks {
             return {};
           });
         newTasksState[cmid].waconEventId = eventId;
+        // La agenda puede haber reemplazado la tarea por una nueva en vez de
+        // actualizarla: si devolvió otro id, es el que hay que seguir usando.
+        if (rescheduledTaskId != null) newTasksState[cmid].waconTaskId = rescheduledTaskId;
         newTasksState[cmid].dueDate = task.dueDate;
         dueChanged.push({ task, from: prevEntry.dueDate });
       }
@@ -148,9 +185,10 @@ export class SyncAcademicTasks {
     for (const o of silentOverdue) state.silentOverdueFlagged.push(String(o.task.cmid));
 
     state.tasks = newTasksState;
+    pruneStaleFlags(state, byCmid, scanErrors, this.logger);
     await this.stateRepository.save(state);
 
-    const summary = { added, dueChanged, resolved, conflicts, silentOverdue };
+    const summary = { added, dueChanged, resolved, conflicts, silentOverdue, keptUnscanned, scanErrors: scanErrors ?? [] };
     this.logger.log(
       `Resumen: +${added.length} nuevas, ${dueChanged.length} con fecha cambiada, ${resolved.length} resueltas, ` +
         `${conflicts.length} conflictos, ${silentOverdue.length} vencidas sin aviso.`,
@@ -170,7 +208,9 @@ export class SyncAcademicTasks {
     if (!this.attachments || !this.attachmentsDestDir || !task.attachments?.length) return [];
     const paths = [];
     for (const a of task.attachments) {
-      const dest = join(this.attachmentsDestDir, String(task.cmid), a.filename);
+      // El nombre lo eligió Moodle, no nosotros: se sanea antes de convertirlo
+      // en un path (ver safeFileName).
+      const dest = join(this.attachmentsDestDir, String(task.cmid), safeFileName(a.filename));
       const result = await this.attachments.downloadAttachment({ url: a.url, dest }).catch((e) => {
         this.logger.log(`downloadAttachment falló para "${a.filename}": ${e.message}`);
         return null;
@@ -179,6 +219,46 @@ export class SyncAcademicTasks {
     }
     return paths;
   }
+}
+
+/**
+ * Claves (courseId y courseName) de los cursos que la fuente académica no pudo
+ * barrer en esta corrida. Se aceptan las dos porque el estado viejo, escrito
+ * antes de que se guardara courseId, solo tiene el nombre.
+ */
+function unscannedCourseKeys(scanErrors) {
+  const keys = new Set();
+  for (const e of scanErrors ?? []) {
+    if (e?.courseId != null) keys.add(String(e.courseId));
+    if (e?.courseName) keys.add(String(e.courseName));
+  }
+  return keys;
+}
+
+/**
+ * Las marcas de "esto ya te lo avisé" (conflictos de fecha, vencidas en
+ * silencio) se acumulaban para siempre: son listas a las que solo se hacía push.
+ * Una vez que la tarea desapareció de la fuente, su marca no sirve más.
+ *
+ * No se poda nada si algún curso no se pudo barrer: en ese caso la ausencia de
+ * una tarea no significa que ya no exista, y borrar su marca haría que el
+ * próximo sync te volviera a avisar del mismo conflicto.
+ */
+function pruneStaleFlags(state, byCmid, scanErrors, logger) {
+  if (scanErrors?.length) return;
+
+  const before = state.flaggedConflicts.length + state.silentOverdueFlagged.length;
+  // Las claves de conflicto son "cmid:idDelEventoSugerido".
+  state.flaggedConflicts = state.flaggedConflicts.filter((key) => byCmid.has(String(key).split(":")[0]));
+  state.silentOverdueFlagged = state.silentOverdueFlagged.filter((cmid) => byCmid.has(String(cmid)));
+
+  const removed = before - (state.flaggedConflicts.length + state.silentOverdueFlagged.length);
+  if (removed > 0) logger.log(`Estado: ${removed} marca(s) de tareas que ya no existen, descartadas.`);
+}
+
+function isUnscanned(prevEntry, unscanned) {
+  if (!unscanned.size) return false;
+  return (prevEntry.courseId != null && unscanned.has(String(prevEntry.courseId))) || unscanned.has(String(prevEntry.courseName));
 }
 
 function truncate(text, max, moreHint) {

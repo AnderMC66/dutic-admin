@@ -9,8 +9,13 @@ export class AgendaPort {
     throw new Error("not implemented");
   }
 
-  /** @param {{taskId:any, eventId?:any, title:string, dueDateIso?:string, notes?:string, notifyBeforeMinutes?:number}} input
-   *  @returns {Promise<{eventId?:any}>} */
+  /**
+   * Mueve de fecha lo que ya estaba reflejado en la agenda. Puede devolver un
+   * `taskId` distinto del recibido: si la agenda no sabe actualizar una tarea
+   * en el lugar, reemplazarla es válido — el llamador debe persistir el que
+   * vuelva.
+   * @param {{taskId:any, eventId?:any, title:string, dueDateIso?:string, notes?:string, notifyBeforeMinutes?:number}} input
+   * @returns {Promise<{taskId?:any, eventId?:any}>} */
   async reschedule(input) {
     throw new Error("not implemented");
   }
@@ -20,7 +25,7 @@ export class AgendaPort {
     throw new Error("not implemented");
   }
 
-  /** @param {{title:string, dueDateIso?:string, notes?:string}} conflict */
+  /** @param {{title:string, dueDateIso?:string, notes?:string}} conflict @returns {Promise<{taskId?:any}>} */
   async flagConflict(conflict) {
     throw new Error("not implemented");
   }

@@ -9,18 +9,25 @@ const DEFAULT_DAYS_BEFORE = 3;
  * de que tengas que entrar a Moodle a buscarlo la noche anterior.
  */
 export class PrefetchExamMaterials {
-  constructor({ taskSource, materials, notifier, stateRepository, logger, daysBefore = DEFAULT_DAYS_BEFORE, destDir }) {
+  constructor({ taskSource, materials, notifier, stateRepository, logger, runLock, daysBefore = DEFAULT_DAYS_BEFORE, destDir }) {
     this.taskSource = taskSource;
     this.materials = materials;
     this.notifier = notifier;
     this.stateRepository = stateRepository;
     this.logger = logger;
+    this.runLock = runLock;
     this.daysBefore = daysBefore;
     this.destDir = destDir;
   }
 
+  /** Serializado entre procesos: dos corridas a la vez descargarían el mismo material sobre el mismo directorio destino. */
   async run() {
-    const { tasks } = await this.taskSource.listAllTasks();
+    if (!this.runLock) return this.performPrefetch();
+    return this.runLock.withExclusiveRun("prefetch-exam-materials", () => this.performPrefetch());
+  }
+
+  async performPrefetch() {
+    const { tasks, scanErrors } = await this.taskSource.listAllTasks();
     const state = await this.stateRepository.load();
     state.examMaterialsFetched ??= [];
 
@@ -37,6 +44,15 @@ export class PrefetchExamMaterials {
       } catch (err) {
         this.logger.log(`prepareCourseMaterials falló para curso ${task.courseId}: ${err.message}`);
       }
+    }
+
+    // La lista de "ya descargado" solo crecía. Se poda a las tareas que todavía
+    // existen — salvo que algún curso no se haya podido barrer, porque entonces
+    // la ausencia no prueba nada y podaríamos marcas que siguen siendo válidas
+    // (y volveríamos a descargar el mismo material).
+    if (!scanErrors?.length) {
+      const knownCmids = new Set(tasks.filter((t) => t.cmid != null).map((t) => String(t.cmid)));
+      state.examMaterialsFetched = state.examMaterialsFetched.filter((cmid) => knownCmids.has(String(cmid)));
     }
 
     await this.stateRepository.save(state);

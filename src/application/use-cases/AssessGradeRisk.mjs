@@ -1,5 +1,5 @@
 import { assessCourseRisk } from "../../domain/services/GradeRisk.mjs";
-import { sameCourse } from "../../domain/services/CourseMatcher.mjs";
+import { findBestCourseMatch } from "../../domain/services/CourseMatcher.mjs";
 
 /**
  * Evalúa el riesgo de reprobar por curso (Moodle + SISACAD si ya está
@@ -31,7 +31,7 @@ export class AssessGradeRisk {
     const newDiscrepancyAlerts = [];
 
     for (const course of moodleGrades) {
-      const sisacadCourse = sisacad?.courses.find((c) => sameCourse(c.subject, course.courseName)) ?? null;
+      const sisacadCourse = findBestCourseMatch(course.courseName, sisacad?.courses, (c) => c.subject);
       const assessment = assessCourseRisk(course, sisacadCourse);
       assessments.push(assessment);
 
@@ -55,7 +55,7 @@ export class AssessGradeRisk {
 
     if (newRiskAlerts.length || newDiscrepancyAlerts.length) {
       await this.notifier
-        .notify(buildMessage({ newRiskAlerts, newDiscrepancyAlerts, sisacadAvailable: Boolean(sisacad) }))
+        .notify(buildMessage({ newRiskAlerts, newDiscrepancyAlerts }))
         .catch((e) => this.logger.log(`notify falló: ${e.message}`));
     }
 
