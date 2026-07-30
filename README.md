@@ -65,14 +65,18 @@ Todo lo que entra queda visible con los comandos normales de wacon: `wacon tasks
 | `bridge_get_unified_brief` | Foto en vivo: pendientes, riesgo de notas, conflictos de fecha, vencidas sin aviso, **+ brief social de wacon** (mensajes sin responder, compromisos). Solo lectura. |
 | `bridge_force_sync` | Corre `SyncAcademicTasks` ya mismo, sin esperar el cron. |
 | `bridge_assess_grade_risk` | Riesgo de reprobar por curso (Moodle % + SISACAD si ya está capturado). |
-| `bridge_prefetch_exam_materials` | Descarga y convierte a Markdown el material de cursos con examen próximo. |
+| `bridge_prefetch_exam_materials` | Descarga y convierte a Markdown el material de cursos con examen próximo. Parámetro: `dias` (default `examDaysBefore` de `config.json`). |
 | `bridge_cross_reference_classmates` | Roster oficial de un curso vs. miembros del grupo de WhatsApp — requiere mapeo previo. |
-| `bridge_get_study_advice` | Consejo de estudio citando material real vía el NotebookLM vinculado al grupo del curso (`wacon consultPlaybook`). |
+| `bridge_get_study_advice` | Consejo de estudio citando material real vía el NotebookLM vinculado al grupo del curso (`wacon consultPlaybook`). Parámetros: `courseId`, `tema`. |
 | `bridge_get_course_digest` | Resumen comprimido de lo último que se habló en el grupo del curso, sin leer el chat entero. |
 | `bridge_get_course_teachers` | Docentes de un curso. |
 | `bridge_list_courses` | Tus cursos con su courseId — llamalo antes de cualquier tool que pida uno. |
 | `bridge_pull_all_materials` | Descarga TODO el material de un curso (más amplio que `bridge_prefetch_exam_materials`). |
 | `bridge_export_calendar` | Genera un `.ics` con tus entregas y lo manda por WhatsApp — importalo al calendario del teléfono. |
+
+Todos los tools se derivan de un único registro de comandos
+(`src/interfaces/commands/registry.mjs`), el mismo del que salen la CLI, el panel interactivo
+y los comandos de WhatsApp: un comando se define una vez y aparece en las cuatro puertas.
 
 `bridge_get_unified_brief.pendingTasks` viene ordenado por **prioridad de estudio**, no por
 fecha: combina el peso real de la evaluación en la libreta de notas (cuando se puede
@@ -363,9 +367,21 @@ puede diagnosticar la causa real de por qué Task Scheduler lo mataba, o registr
 - `state.json` — qué tareas ya se reflejaron en wacon, qué conflictos/vencidas-sin-aviso ya
   se avisaron, el último estado de riesgo por curso, y los cursores (`triggerListener`,
   `lastCommandTs`) del reminder-listener para no repetir ni perder nada entre reinicios.
-- `config.json` — `commandChatJid`: a qué chat van los avisos y de dónde se leen los
-  comandos. Vacío = tu propio chat (no sirve para comandos desde el celular, ver la sección de
-  comandos más arriba). Se autogenera vacío en el primer uso.
+- `config.json` — ajustes del usuario, se autogenera con los defaults y su documentación en
+  el primer uso:
+  | Clave | Default | Qué controla |
+  |---|---|---|
+  | `commandChatJid` | `null` | A qué chat van los avisos y de dónde se leen los comandos. Vacío = tu propio chat (no sirve para comandos desde el celular, ver la sección de comandos más arriba). |
+  | `dailyBriefHour` | `7` | Hora de Lima a la que sale solo el brief del día. |
+  | `reminderMinutesBefore` | `1440` | Cuánto antes del vencimiento avisa el recordatorio. |
+  | `conflictThresholdHours` | `20` | Diferencia mínima Moodle-vs-grupo para marcar conflicto de fecha. |
+  | `examDaysBefore` | `3` | Ventana de `!examen` sin argumento. |
+  | `passingPercentage` | `52.5` | Mínimo aprobatorio en % (10,5/20 en la UNSA). |
+  | `sourceCacheSeconds` | `60` | Cuánto se reusa una lectura de tareas/notas antes de volver a preguntarle a dutic. |
+  | `failureNotifyCooldownHours` | `24` | Cada cuánto repetir el aviso si el sync sigue fallando por lo mismo. |
+
+  Un valor inválido se ignora (se usa el default) y un archivo roto no tumba nada. Sólo
+  `commandChatJid` se relee en caliente; el resto se toma al arrancar el proceso.
 - `course-groups.json` — mapeo manual `courseId` (dutic) → JID de grupo (wacon), necesario
   para `bridge_cross_reference_classmates`, `bridge_get_study_advice` y
   `bridge_get_course_digest`. Se autogenera vacío (con instrucciones) en el primer uso; lo
@@ -374,8 +390,15 @@ puede diagnosticar la causa real de por qué Task Scheduler lo mataba, o registr
   curso, y adivinar mal generaría cruces falsos.
 - `adjuntos/<cmid>/` — archivos descargados de las consignas (guías, rúbricas) de cada tarea
   nueva, los mismos que se mandan por WhatsApp.
-- `materiales-completos/<courseId>/` — descargas de `bridge_pull_all_materials`.
-- `sync.log` — log compartido de las tres corridas (cron, listener, MCP).
+- `materiales/` y `materiales-completos/<courseId>/` — descargas de
+  `bridge_prefetch_exam_materials` y `bridge_pull_all_materials`.
+- `calendario.ics` — último calendario generado por `bridge_export_calendar`.
+- `sync.log` — log compartido de las cuatro puertas (cron, listener, MCP, CLI). Rota a
+  `sync.log.1` pasados 5 MB.
+- `state.lock`, `<caso-de-uso>.run.lock` — locks entre procesos: el primero protege la
+  escritura de `state.json`, los segundos evitan que dos corridas del mismo caso de uso (el
+  cron y un `!sync`, por ejemplo) se pisen. Son directorios y se borran solos; si quedara uno
+  huérfano tras un corte, expira por antigüedad.
 
 ## Limitaciones conocidas
 
@@ -397,8 +420,17 @@ puede diagnosticar la causa real de por qué Task Scheduler lo mataba, o registr
   (`NameMatcher.namesMatch`) — si no encuentra un ítem que calce, usa un peso por defecto (10%)
   en vez de tratarla como 0%, para no hacerla desaparecer del orden de prioridad.
 - **Adjuntos con caracteres raros en el nombre**: la descarga pasa por el shim `dutic.cmd` de
-  Windows (`shell:true`), que no escapa solo — el bridge cita cada argumento a mano
-  (`execDutic.mjs`) para que nombres con espacios/tildes no se corten.
+  Windows (`shell:true`), que no escapa solo. El bridge cita cada argumento (`execDutic.mjs`)
+  para que nombres con espacios/tildes no se corten, **rechaza** los que traen comillas o
+  caracteres de control (cmd.exe no tiene forma confiable de escaparlos) y reduce el nombre
+  que viene de Moodle a un basename seguro antes de armar el path
+  (`domain/services/SafeFileName.mjs`).
+- **Tareas sin estado de entrega legible**: dutic crea todas las tareas con
+  `submission: "unknown"` y sólo el enriquecimiento —que traga sus fallos por tarea— les pone
+  el estado real. Una tarea cuyo detalle no se pudo leer queda en `unknown`: el bridge **no**
+  la sincroniza (no sabe si está entregada) pero la cuenta y la avisa una vez, en el resumen
+  del sync y en el brief, para que no desaparezca en silencio. Si te aparecen seguido, suele
+  ser sesión de Moodle a punto de caerse.
 - **Riesgo de notas sin SISACAD**: sin `dutic sisacad` corrido al menos una vez (login +
   CAPTCHA manual, no automatizable), el riesgo se calcula solo con el % que expone Moodle,
   que puede no reflejar el peso real de cada evaluación todavía.
