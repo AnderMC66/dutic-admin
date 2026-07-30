@@ -9,12 +9,12 @@ import { execDutic } from "./execDutic.mjs";
  */
 export class DuticCliMaterialsAdapter extends MaterialsPort {
   async prepareCourseMaterials({ courseId, dest }) {
-    const output = execDutic(["study", String(courseId), "--dest", dest], { timeout: 5 * 60_000, maxBuffer: 16 * 1024 * 1024 });
+    const output = await execDutic(["study", String(courseId), "--dest", dest], { timeout: 5 * 60_000, maxBuffer: 16 * 1024 * 1024 });
     return { dest: `${dest}/curso-${courseId}`, summary: output.trim().split("\n").slice(-3).join(" · ") };
   }
 
   async pullAllMaterials({ courseId, dest }) {
-    const output = execDutic(["pull", String(courseId), "--dest", dest], { timeout: 10 * 60_000, maxBuffer: 16 * 1024 * 1024 });
+    const output = await execDutic(["pull", String(courseId), "--dest", dest], { timeout: 10 * 60_000, maxBuffer: 16 * 1024 * 1024 });
     return { dest, summary: output.trim().split("\n").slice(-3).join(" · ") };
   }
 }

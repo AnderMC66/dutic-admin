@@ -9,7 +9,7 @@ import { execDutic } from "./execDutic.mjs";
  */
 export class DuticCliTaskSource extends AcademicTaskSourcePort {
   async listAllTasks() {
-    const raw = execDutic(["tasks", "--all", "--json"], { timeout: 5 * 60_000, maxBuffer: 32 * 1024 * 1024 });
+    const raw = await execDutic(["tasks", "--all", "--json"], { timeout: 5 * 60_000, maxBuffer: 32 * 1024 * 1024 });
     return JSON.parse(raw); // { tasks: Task[], scanErrors: [...] }
   }
 }

@@ -8,7 +8,7 @@ import { execDutic } from "./execDutic.mjs";
  */
 export class DuticCliTeachersAdapter extends TeachersSourcePort {
   async listCourseTeachers(courseId) {
-    const output = execDutic(["teachers", String(courseId)], { timeout: 60_000 });
+    const output = await execDutic(["teachers", String(courseId)], { timeout: 60_000 });
     return output
       .split("\n")
       .map((l) => l.trim())

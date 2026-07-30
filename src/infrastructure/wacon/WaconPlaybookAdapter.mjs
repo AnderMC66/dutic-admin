@@ -7,6 +7,8 @@ export class WaconPlaybookAdapter extends PlaybookPort {
   }
 
   async consult({ chatJid, situation }) {
-    return this.client.rpc("consultPlaybook", [chatJid, situation]);
+    // Del otro lado hay una consulta a NotebookLM: puede tardar bastante más que
+    // cualquier otra llamada al daemon.
+    return this.client.rpc("consultPlaybook", [chatJid, situation], { timeoutMs: 4 * 60_000 });
   }
 }

@@ -5,7 +5,7 @@ export class DuticCliSisacadSource extends SisacadSourcePort {
   async loadCaptured() {
     let raw;
     try {
-      raw = execDutic(["sisacad", "show", "--json"], { timeout: 30_000 });
+      raw = await execDutic(["sisacad", "show", "--json"], { timeout: 30_000 });
     } catch {
       return null; // sin sesión/captura previa: no es un error, solo no hay dato aún
     }
