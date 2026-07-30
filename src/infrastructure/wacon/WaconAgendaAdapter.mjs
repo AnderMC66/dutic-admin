@@ -64,4 +64,19 @@ export class WaconAgendaAdapter extends AgendaPort {
   async listSuggestedEvents() {
     return this.client.rpc("listSuggestedEvents", ["suggested", 200]);
   }
+
+  async dismissSuggestion(suggestionId) {
+    return this.client.rpc("dismissSuggestedEvent", [suggestionId]);
+  }
+
+  async listOwnItems() {
+    const [tasks, events] = await Promise.all([
+      this.client.rpc("listTasks", [false]).catch(() => []),
+      this.client.rpc("listEvents", [{ includeDone: false, withinDays: 400 }]).catch(() => []),
+    ]);
+    return {
+      tasks: (tasks ?? []).map((t) => ({ id: t.id, title: t.title, due: t.due ?? t.due_ts ?? null })),
+      events: (events ?? []).map((e) => ({ id: e.id, title: e.title, start: e.start ?? e.start_ts ?? null })),
+    };
+  }
 }

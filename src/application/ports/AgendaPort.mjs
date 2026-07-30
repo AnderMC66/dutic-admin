@@ -34,4 +34,21 @@ export class AgendaPort {
   async listSuggestedEvents() {
     throw new Error("not implemented");
   }
+
+  /**
+   * Marca una sugerencia como ya atendida, para que deje de reaparecer en cada
+   * corrida. Sin esto la bandeja de sugerencias crece para siempre y se
+   * re-evalúa entera cada vez.
+   * @param {any} suggestionId */
+  async dismissSuggestion(suggestionId) {
+    throw new Error("not implemented");
+  }
+
+  /**
+   * Lo que hay HOY en la agenda, para poder cruzarlo contra lo que el bridge
+   * cree haber creado y detectar huérfanos.
+   * @returns {Promise<{tasks: Array<{id:any, title:string, due?:string}>, events: Array<{id:any, title:string, start?:string}>}>} */
+  async listOwnItems() {
+    throw new Error("not implemented");
+  }
 }
