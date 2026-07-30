@@ -1,8 +1,12 @@
+// Mismo criterio que CourseMatcher: \p{M} en vez de un rango U+0300-U+036F
+// escrito con las marcas literales, que son invisibles en el editor.
+const COMBINING_MARKS = /\p{M}/gu;
+
 function tokens(name) {
   return (name ?? "")
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(COMBINING_MARKS, "")
     .split(/[^a-z]+/)
     .filter((t) => t.length > 2);
 }

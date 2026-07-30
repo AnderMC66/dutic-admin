@@ -29,7 +29,7 @@ function sisacadToPercentage(weightedAverageSoFar) {
 
 /**
  * @param {{courseId:number, courseName:string, total:string|null, totalPercentage:string|null}} courseGrades
- * @param {{weightedAverageSoFar:number|null}|null} sisacadCourse
+ * @param {{subject?:string, weightedAverageSoFar:number|null}|null} sisacadCourse
  */
 export function assessCourseRisk(
   courseGrades,

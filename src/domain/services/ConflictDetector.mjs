@@ -1,4 +1,5 @@
 import { keywords } from "./CourseMatcher.mjs";
+import { isPending } from "../entities/AcademicTask.mjs";
 
 /**
  * Cruza tareas oficiales de DUTIC contra los "accionables" que wacon ya
@@ -9,15 +10,20 @@ import { keywords } from "./CourseMatcher.mjs";
  */
 export function findDateConflicts(duticTasks, suggestedEvents, alreadyFlagged, thresholdHours = 20) {
   const conflicts = [];
-  const pending = duticTasks.filter((t) => t.submission === "not-submitted" && t.dueDate);
+  // isPending() en vez de repetir el literal "not-submitted": además exige cmid,
+  // que acá hace falta porque la clave de "ya avisado" es `${cmid}:${id}` — sin
+  // cmid, dos tareas distintas compartirían la clave "undefined:algo".
+  const pending = duticTasks.filter((t) => isPending(t) && t.dueDate);
+
+  // Las palabras clave de cada evento sugerido se calculan una sola vez, no una
+  // por cada tarea (y menos una por cada palabra de cada tarea).
+  const indexed = suggestedEvents.filter((s) => s.when).map((s) => ({ event: s, words: keywords(`${s.chatName ?? ""} ${s.title ?? ""} ${s.raw ?? ""}`) }));
 
   for (const task of pending) {
     const courseWords = keywords(task.courseName);
     if (!courseWords.length) continue;
 
-    for (const s of suggestedEvents) {
-      if (!s.when) continue;
-      const haystack = keywords(`${s.chatName ?? ""} ${s.title ?? ""} ${s.raw ?? ""}`);
+    for (const { event: s, words: haystack } of indexed) {
       const overlaps = courseWords.some((w) => haystack.includes(w));
       if (!overlaps) continue;
 
