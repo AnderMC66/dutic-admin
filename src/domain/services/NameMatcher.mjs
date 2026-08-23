@@ -13,8 +13,8 @@ function tokens(name) {
 
 /**
  * true si dos nombres probablemente son la misma persona. Los nombres
- * oficiales de DUTIC vienen completos ("RODRIGO ANDERSON CAPIA CONDORI") y
- * los de WhatsApp suelen ser un apodo o nombre parcial ("Rodrigo Capia") —
+ * oficiales de DUTIC vienen completos ("JUAN CARLOS PEREZ ROJAS") y
+ * los de WhatsApp suelen ser un apodo o nombre parcial ("Juan Perez") —
  * por eso se compara por superposición de tokens, no por igualdad exacta.
  */
 export function namesMatch(nameA, nameB) {
